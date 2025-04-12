@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 
 	"github.com/gorilla/mux"
 )
@@ -28,10 +30,10 @@ type Comment struct {
 var posts []Post
 var currentID int = 1
 
-func main() {
+func setupRouter() *mux.Router {
 	r := mux.NewRouter()
 
-	// Initialize some mock data
+	// Initialize mock data
 	posts = []Post{
 		{
 			ID:     1,
@@ -51,8 +53,35 @@ func main() {
 	r.HandleFunc("/posts/{id}", deletePost).Methods("DELETE")
 	r.HandleFunc("/posts/{id}/comments", getComments).Methods("GET")
 
-	fmt.Println("Server starting on :8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	return r
+}
+
+func startServer(router *mux.Router) {
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: router,
+	}
+
+	// Setup signal handling
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start server in goroutine
+	go func() {
+		log.Printf("Server starting on %s\n", server.Addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	<-stopChan
+	log.Println("Shutting down server...")
+}
+
+func main() {
+	router := setupRouter()
+	startServer(router)
 }
 
 func getPost(w http.ResponseWriter, r *http.Request) {

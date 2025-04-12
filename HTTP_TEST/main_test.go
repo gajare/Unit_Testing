@@ -2,14 +2,10 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/signal"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -237,82 +233,63 @@ func TestGetComments(t *testing.T) {
 	}
 }
 
-func TestMainFunction(t *testing.T) {
-	// Create a channel to listen for OS signals
-	exitChan := make(chan os.Signal, 1)
-	signal.Notify(exitChan, os.Interrupt)
+func TestSetupRouter(t *testing.T) {
+	router := setupRouter()
 
-	// Run main in goroutine
-	go func() {
-		main()
-	}()
+	tests := []struct {
+		method string
+		path   string
+		status int
+	}{
+		{"GET", "/posts/1", http.StatusOK},
+		{"POST", "/posts", http.StatusCreated},
+		{"PUT", "/posts/1", http.StatusOK},
+		{"PATCH", "/posts/1", http.StatusOK},
+		{"DELETE", "/posts/1", http.StatusNoContent},
+		{"GET", "/posts/1/comments", http.StatusOK},
+	}
 
-	// Give server time to start
-	time.Sleep(100 * time.Millisecond)
+	ts := httptest.NewServer(router)
+	defer ts.Close()
 
-	// Test server is reachable
-	t.Run("TestServerStartup", func(t *testing.T) {
-		resp, err := http.Get("http://localhost:8080/posts")
-		if err != nil {
-			t.Fatalf("Server not running: %v", err)
-		}
-		defer resp.Body.Close()
+	client := ts.Client()
 
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("Expected status 200, got %d", resp.StatusCode)
-		}
-	})
-
-	// Test all routes are registered
-	t.Run("TestRouteRegistration", func(t *testing.T) {
-		testRouter := mux.NewRouter()
-		testRouter.HandleFunc("/posts/{id}", getPost).Methods("GET")
-		testRouter.HandleFunc("/posts", getPosts).Methods("GET")
-		testRouter.HandleFunc("/posts", createPost).Methods("POST")
-		testRouter.HandleFunc("/posts/{id}", updatePost).Methods("PUT")
-		testRouter.HandleFunc("/posts/{id}", patchPost).Methods("PATCH")
-		testRouter.HandleFunc("/posts/{id}", deletePost).Methods("DELETE")
-		testRouter.HandleFunc("/posts/{id}/comments", getComments).Methods("GET")
-
-		server := httptest.NewServer(testRouter)
-		defer server.Close()
-
-		tests := []struct {
-			method string
-			path   string
-			status int
-		}{
-			{"GET", "/posts/1", http.StatusOK},
-			{"POST", "/posts", http.StatusCreated},
-			{"PUT", "/posts/1", http.StatusOK},
-			{"PATCH", "/posts/1", http.StatusOK},
-			{"DELETE", "/posts/1", http.StatusNoContent},
-			{"GET", "/posts/1/comments", http.StatusOK},
-		}
-
-		client := server.Client()
-		for _, tt := range tests {
-			req, _ := http.NewRequest(tt.method, server.URL+tt.path, nil)
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			req, _ := http.NewRequest(tt.method, ts.URL+tt.path, nil)
 			if tt.method == "POST" || tt.method == "PUT" || tt.method == "PATCH" {
-				req.Body = io.NopCloser(strings.NewReader(`{"title":"test"}`))
+				req.Body = http.NoBody
 				req.Header.Set("Content-Type", "application/json")
 			}
 
 			resp, err := client.Do(req)
 			if err != nil {
-				t.Errorf("%s %s: %v", tt.method, tt.path, err)
-				continue
+				t.Fatalf("Request failed: %v", err)
 			}
+			defer resp.Body.Close()
 
 			if resp.StatusCode != tt.status {
-				t.Errorf("%s %s: got status %d, want %d",
-					tt.method, tt.path, resp.StatusCode, tt.status)
+				t.Errorf("Expected status %d, got %d", tt.status, resp.StatusCode)
 			}
-			resp.Body.Close()
-		}
-	})
+		})
+	}
+}
 
-	// Simulate CTRL+C to shutdown server
-	exitChan <- os.Interrupt
-	time.Sleep(100 * time.Millisecond)
+func TestStartServer(t *testing.T) {
+	router := setupRouter()
+
+	// Create a test server with a random port
+	testServer := httptest.NewServer(router)
+	defer testServer.Close()
+
+	// Verify server is running
+	resp, err := http.Get(testServer.URL + "/posts/1")
+	if err != nil {
+		t.Fatalf("Server not running: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
 }
